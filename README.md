@@ -45,6 +45,14 @@ jobs:
 | `api-key` | Your DarkLens API key. Get your key free at [darklens.dev/dashboard](https://darklens.dev/dashboard). | **Yes** | — |
 | `threshold` | Minimum acceptable compliance score (0–100). The action will fail the build if the audit score falls below this threshold. | No | `70` |
 
+### 🎯 Which Threshold Should You Use?
+
+| Threshold | Profile | Recommended For | Build Behavior |
+| :---: | :--- | :--- | :--- |
+| **`70 – 75`** | **Standard (Recommended)** | General SaaS, E-Commerce, Consumer Apps | The sweet spot. Blocks serious deceptive patterns (sneaky subscriptions, fake countdowns, hidden fees) without annoying developers on minor copy variations. |
+| **`85 – 95`** | **Strict Compliance** | Fintech, Banking, Healthcare, EU Regulated | Zero-tolerance mode. Enforces strict GDPR cookie equality, pristine WCAG contrast, and explicit cancellation clarity. |
+| **`50 – 60`** | **Lenient / Redesign** | Legacy platforms undergoing multi-phase redesigns | Catches only catastrophic legal traps (e.g. Roach Motel cancellations) while letting early-stage teams iterate quickly. |
+
 ---
 
 ## 🎯 What Does DarkLens Detect?
