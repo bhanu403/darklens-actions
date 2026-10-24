@@ -1,5 +1,5 @@
 name: 'DarkLens Compliance Scan'
-description: 'Automatically scan pull requests and deployments for deceptive design (Dark Patterns) and compliance violations (GDPR, FTC, CCPA).'
+description: 'Scan pull requests and deployments for Dark Patterns and compliance violations (GDPR, FTC, CCPA).'
 author: 'DarkLens'
 branding:
   icon: 'shield'
