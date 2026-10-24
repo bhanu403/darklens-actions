@@ -1,0 +1,65 @@
+name: 'DarkLens Compliance Scan'
+description: 'Automatically scan pull requests and deployments for deceptive design (Dark Patterns) and compliance violations (GDPR, FTC, CCPA).'
+author: 'DarkLens'
+branding:
+  icon: 'shield'
+  color: 'purple'
+inputs:
+  url:
+    description: 'The URL of the deployment or staging server to audit (e.g., https://staging.myapp.com)'
+    required: true
+  api-key:
+    description: 'DarkLens API Key (create free at https://darklens.dev/dashboard)'
+    required: true
+  threshold:
+    description: 'Minimum passing compliance score (0-100). Fails the workflow if score drops below threshold.'
+    required: false
+    default: '70'
+runs:
+  using: 'composite'
+  steps:
+    - name: Run DarkLens API
+      shell: bash
+      run: |
+        echo "🔍 Starting DarkLens Compliance Scan on ${{ inputs.url }}..."
+        
+        RESULT=$(curl -s -X POST https://darklens.dev/api/ci/scan \
+          -H "Authorization: Bearer ${{ inputs.api-key }}" \
+          -H "Content-Type: application/json" \
+          -d "{\"url\": \"${{ inputs.url }}\", \"threshold\": ${{ inputs.threshold }}}")
+          
+        # Check for API-level errors first (e.g. Rate limits, invalid keys, timeouts)
+        ERROR_MSG=$(echo $RESULT | jq -r '.message // empty')
+        ERROR_TITLE=$(echo $RESULT | jq -r '.error // empty')
+        
+        if [ ! -z "$ERROR_TITLE" ] && [ "$ERROR_TITLE" != "null" ]; then
+          echo "::error::DarkLens API Error: $ERROR_TITLE - $ERROR_MSG"
+          exit 1
+        fi
+
+        PASS=$(echo $RESULT | jq -r '.pass')
+        SCORE=$(echo $RESULT | jq -r '.score')
+        FAIL_REASON=$(echo $RESULT | jq -r '.failReason // empty')
+        
+        echo "======================================"
+        echo "🛡️ DarkLens Score: $SCORE / 100"
+        echo "🎯 Threshold: ${{ inputs.threshold }}"
+        echo "======================================"
+        
+        if [ "$PASS" != "true" ]; then
+          echo "::error::Dark pattern check failed! $FAIL_REASON"
+          
+          # Print specific findings if they exist
+          FINDINGS_COUNT=$(echo $RESULT | jq '.findings | length')
+          if [ "$FINDINGS_COUNT" -gt 0 ] 2>/dev/null; then
+            echo "🚨 Flagged Compliance Issues:"
+            echo $RESULT | jq -c '.findings[]' | while read i; do
+               SEV=$(echo $i | jq -r '.severity')
+               NAME=$(echo $i | jq -r '.name')
+               echo "::error::[$SEV] $NAME"
+            done
+          fi
+          exit 1
+        fi
+        
+        echo "✅ Dark pattern check passed! No high-risk compliance violations detected."
