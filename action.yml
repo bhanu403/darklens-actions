@@ -9,57 +9,119 @@ inputs:
     description: 'The URL of the deployment or staging server to audit (e.g., https://staging.myapp.com)'
     required: true
   api-key:
-    description: 'DarkLens API Key (create free at https://darklens.dev/dashboard)'
+    description: 'DarkLens API Key (create at https://darklens.dev/dashboard)'
     required: true
   threshold:
     description: 'Minimum passing compliance score (0-100). Fails the workflow if score drops below threshold.'
     required: false
     default: '70'
+  fail-on:
+    description: 'Failure criterion: score, critical, or any'
+    required: false
+    default: 'score'
+outputs:
+  score:
+    description: 'Compliance score returned by DarkLens (0-100)'
+    value: ${{ steps.darklens.outputs.score }}
+  issues-count:
+    description: 'Number of detected dark pattern findings'
+    value: ${{ steps.darklens.outputs.issues-count }}
+  pass:
+    description: 'Whether the scan satisfied threshold and fail-on criteria (true/false)'
+    value: ${{ steps.darklens.outputs.pass }}
 runs:
   using: 'composite'
   steps:
     - name: Run DarkLens API
+      id: darklens
       shell: bash
+      env:
+        INPUT_URL: ${{ inputs.url }}
+        INPUT_API_KEY: ${{ inputs.api-key }}
+        INPUT_THRESHOLD: ${{ inputs.threshold }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
       run: |
-        echo "🔍 Starting DarkLens Compliance Scan on ${{ inputs.url }}..."
-        
-        RESULT=$(curl -s -X POST https://darklens.dev/api/ci/scan \
-          -H "Authorization: Bearer ${{ inputs.api-key }}" \
-          -H "Content-Type: application/json" \
-          -d "{\"url\": \"${{ inputs.url }}\", \"threshold\": ${{ inputs.threshold }}}")
-          
-        # Check for API-level errors first (e.g. Rate limits, invalid keys, timeouts)
-        ERROR_MSG=$(echo $RESULT | jq -r '.message // empty')
-        ERROR_TITLE=$(echo $RESULT | jq -r '.error // empty')
-        
-        if [ ! -z "$ERROR_TITLE" ] && [ "$ERROR_TITLE" != "null" ]; then
-          echo "::error::DarkLens API Error: $ERROR_TITLE - $ERROR_MSG"
+        set -euo pipefail
+
+        if ! [[ "$INPUT_URL" =~ ^https?:// ]]; then
+          echo "::error::Invalid url '$INPUT_URL'. Must start with http:// or https://."
           exit 1
         fi
 
-        PASS=$(echo $RESULT | jq -r '.pass')
-        SCORE=$(echo $RESULT | jq -r '.score')
-        FAIL_REASON=$(echo $RESULT | jq -r '.failReason // empty')
-        
+        if ! { [ "$INPUT_THRESHOLD" = "0" ] || [[ "$INPUT_THRESHOLD" =~ ^[1-9][0-9]*$ ]]; } || [ "$INPUT_THRESHOLD" -gt 100 ]; then
+          echo "::error::Invalid threshold '$INPUT_THRESHOLD'. Must be an integer between 0 and 100 without leading zeros."
+          exit 1
+        fi
+
+        case "$INPUT_FAIL_ON" in
+          score|critical|any) ;;
+          *)
+            echo "::error::Invalid fail-on '$INPUT_FAIL_ON'. Expected 'score', 'critical', or 'any'."
+            exit 1
+            ;;
+        esac
+
+        echo "Starting DarkLens Compliance Scan on $INPUT_URL..."
+
+        PAYLOAD=$(jq -n \
+          --arg url "$INPUT_URL" \
+          --arg failOn "$INPUT_FAIL_ON" \
+          --argjson threshold "$INPUT_THRESHOLD" \
+          '{url: $url, threshold: $threshold, failOn: $failOn}')
+
+        RAW_RESPONSE=$(curl -sS --max-time 60 -w "\n%{http_code}" -X POST https://darklens.dev/api/ci/scan \
+          -H "Authorization: Bearer $INPUT_API_KEY" \
+          -H "Content-Type: application/json" \
+          -d "$PAYLOAD")
+
+        HTTP_CODE=$(printf '%s' "$RAW_RESPONSE" | tail -n1)
+        RESULT=$(printf '%s' "$RAW_RESPONSE" | sed '$d')
+
+        if ! printf '%s' "$RESULT" | jq -e . >/dev/null 2>&1; then
+          echo "::error::DarkLens API returned non-JSON response (HTTP $HTTP_CODE)."
+          exit 1
+        fi
+
+        if [ "$HTTP_CODE" -ne 200 ] && [ "$HTTP_CODE" -ne 422 ]; then
+          ERROR_TITLE=$(printf '%s' "$RESULT" | jq -r '.error // "HTTP Error"')
+          ERROR_MSG=$(printf '%s' "$RESULT" | jq -r '.message // empty')
+          echo "::error::DarkLens API Error ($HTTP_CODE): $ERROR_TITLE - $ERROR_MSG"
+          exit 1
+        fi
+
+        PASS=$(printf '%s' "$RESULT" | jq -r '.pass // false' | tr -d '\r\n')
+        SCORE=$(printf '%s' "$RESULT" | jq -r '.score // 0' | tr -d '\r\n')
+        FAIL_REASON=$(printf '%s' "$RESULT" | jq -r '.failReason // empty' | tr -d '\r\n')
+        FINDINGS_COUNT=$(printf '%s' "$RESULT" | jq '(.findings // []) | length' | tr -d '\r\n')
+
+        {
+          echo "score=$SCORE"
+          echo "issues-count=$FINDINGS_COUNT"
+          echo "pass=$PASS"
+        } >> "$GITHUB_OUTPUT"
+
+        {
+          echo "DARKLENS_SCORE=$SCORE"
+          echo "DARKLENS_ISSUES_COUNT=$FINDINGS_COUNT"
+          echo "DARKLENS_PASS=$PASS"
+        } >> "$GITHUB_ENV"
+
         echo "======================================"
-        echo "🛡️ DarkLens Score: $SCORE / 100"
-        echo "🎯 Threshold: ${{ inputs.threshold }}"
+        echo "DarkLens Score: $SCORE / 100"
+        echo "Threshold: $INPUT_THRESHOLD (Criterion: $INPUT_FAIL_ON)"
+        echo "Findings: $FINDINGS_COUNT"
         echo "======================================"
-        
+
         if [ "$PASS" != "true" ]; then
           echo "::error::Dark pattern check failed! $FAIL_REASON"
-          
-          # Print specific findings if they exist
-          FINDINGS_COUNT=$(echo $RESULT | jq '.findings | length')
           if [ "$FINDINGS_COUNT" -gt 0 ] 2>/dev/null; then
-            echo "🚨 Flagged Compliance Issues:"
-            echo $RESULT | jq -c '.findings[]' | while read i; do
-               SEV=$(echo $i | jq -r '.severity')
-               NAME=$(echo $i | jq -r '.name')
-               echo "::error::[$SEV] $NAME"
+            printf '%s' "$RESULT" | jq -c '.findings[]' | while IFS= read -r finding; do
+              SEV=$(printf '%s' "$finding" | jq -r '.severity // "issue"')
+              NAME=$(printf '%s' "$finding" | jq -r '.name // "Unknown issue"')
+              echo "::error::[$SEV] $NAME"
             done
           fi
           exit 1
         fi
-        
-        echo "✅ Dark pattern check passed! No high-risk compliance violations detected."
+
+        echo "Dark pattern check passed! No high-risk compliance violations detected."

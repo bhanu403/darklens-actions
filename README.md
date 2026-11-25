@@ -44,6 +44,15 @@ jobs:
 | `url` | The URL of the deployment or staging server to audit (e.g., `https://staging.myapp.com` or Vercel preview URL). | **Yes** | — |
 | `api-key` | Your DarkLens API key. Get your key free at [darklens.dev/dashboard](https://darklens.dev/dashboard). | **Yes** | — |
 | `threshold` | Minimum acceptable compliance score (0–100). The action will fail the build if the audit score falls below this threshold. | No | `70` |
+| `fail-on` | Failure criterion (`score`, `critical`, or `any`). | No | `score` |
+
+## 📤 Outputs & Environment Variables
+
+| Output | Env Var Exported | Description |
+| :--- | :--- | :--- |
+| `score` | `DARKLENS_SCORE` | Compliance score (`0–100`) returned by DarkLens |
+| `issues-count` | `DARKLENS_ISSUES_COUNT` | Total number of detected dark pattern findings |
+| `pass` | `DARKLENS_PASS` | Whether the scan passed (`true`/`false`) |
 
 ### 🎯 Which Threshold Should You Use?
 
