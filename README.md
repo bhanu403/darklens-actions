@@ -4,7 +4,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![DarkLens](https://img.shields.io/badge/Powered%20by-DarkLens.dev-8B5CF6)](https://darklens.dev)
 
-Automate compliance and dark pattern testing in your CI/CD pipeline. Automatically audit pull requests, staging environments, and production deployments for deceptive design patterns, regulatory violations (FTC, GDPR, CCPA/CPRA, EU DSA), and sneaky recurring checkout traps before shipping code to customers.
+Automate compliance and dark pattern testing in your CI/CD pipeline. Automatically audit pull requests, staging environments, and production deployments for deceptive design patterns, regulatory violations (**FTC Act Sec. 5, GDPR, CCPA/CPRA, EU DSA**), and sneaky checkout traps before shipping code to customers.
+
+- **Native Node 24 Runtime:** Zero external dependencies (`node24`), cross-platform across Ubuntu, macOS, and Windows runners.
+- **Rich GitHub Job Summary:** Automatically renders a compliance scorecard, jurisdictions at risk, fair-pattern alternatives, fix steps, and code snippets in every workflow run.
+- **Sticky PR Comments (Optional):** Set `comment-pr: 'true'` to automatically post and update a single non-spamming compliance report on Pull Requests.
 
 ---
 
@@ -16,23 +20,26 @@ Add DarkLens to any GitHub workflow (e.g., `.github/workflows/compliance.yml`):
 name: Deceptive Design & Compliance Audit
 
 on:
-  deployment_status:
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write # Only needed if setting comment-pr: 'true'
 
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
       - name: Run DarkLens Compliance Scan
         uses: bhanu403/darklens-actions@v1
         with:
           url: 'https://staging.myapp.com'
           api-key: ${{ secrets.DARKLENS_API_KEY }}
           threshold: 75
+          fail-on: 'score'
+          comment-pr: 'true'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
 ---
@@ -41,10 +48,13 @@ jobs:
 
 | Input | Description | Required | Default |
 | :--- | :--- | :---: | :---: |
-| `url` | The URL of the deployment or staging server to audit (e.g., `https://staging.myapp.com` or Vercel preview URL). | **Yes** | — |
-| `api-key` | Your DarkLens API key. Get your key free at [darklens.dev/dashboard](https://darklens.dev/dashboard). | **Yes** | — |
-| `threshold` | Minimum acceptable compliance score (0–100). The action will fail the build if the audit score falls below this threshold. | No | `70` |
-| `fail-on` | Failure criterion (`score`, `critical`, or `any`). | No | `score` |
+| `url` | The URL of the deployment or staging server to audit (e.g., Vercel preview URL). | **Yes** | — |
+| `api-key` | Your DarkLens API key. Get your key at [darklens.dev/dashboard](https://darklens.dev/dashboard). | **Yes** | — |
+| `threshold` | Minimum acceptable compliance score (0–100). Fails the build if score drops below threshold. | No | `70` |
+| `fail-on` | Failure criterion: `score`, `critical`, or `any`. | No | `score` |
+| `comment-pr` | Post or update a sticky DarkLens compliance report on Pull Requests (`true`/`false`). | No | `false` |
+| `github-token` | GitHub token (`${{ secrets.GITHUB_TOKEN }}`) used when `comment-pr` is `true`. | No | `''` |
+| `api-url` | Optional DarkLens CI endpoint override. | No | `https://darklens.dev/api/ci/scan` |
 
 ## 📤 Outputs & Environment Variables
 
@@ -52,37 +62,39 @@ jobs:
 | :--- | :--- | :--- |
 | `score` | `DARKLENS_SCORE` | Compliance score (`0–100`) returned by DarkLens |
 | `issues-count` | `DARKLENS_ISSUES_COUNT` | Total number of detected dark pattern findings |
-| `pass` | `DARKLENS_PASS` | Whether the scan passed (`true`/`false`) |
+| `critical-count` | `DARKLENS_CRITICAL_COUNT` | Total number of critical findings |
+| `pass` | `DARKLENS_PASS` | Whether the scan satisfied threshold and fail-on criteria (`true`/`false`) |
+| `summary` | — | Concise audit summary string |
 
 ### 🎯 Which Threshold Should You Use?
 
 | Threshold | Profile | Recommended For | Build Behavior |
 | :---: | :--- | :--- | :--- |
-| **`70 – 75`** | **Standard (Recommended)** | General SaaS, E-Commerce, Consumer Apps | The sweet spot. Blocks serious deceptive patterns (sneaky subscriptions, fake countdowns, hidden fees) without annoying developers on minor copy variations. |
-| **`85 – 95`** | **Strict Compliance** | Fintech, Banking, Healthcare, EU Regulated | Zero-tolerance mode. Enforces strict GDPR cookie equality, pristine WCAG contrast, and explicit cancellation clarity. |
-| **`50 – 60`** | **Lenient / Redesign** | Legacy platforms undergoing multi-phase redesigns | Catches only catastrophic legal traps (e.g. Roach Motel cancellations) while letting early-stage teams iterate quickly. |
+| **`70 – 75`** | **Standard (Recommended)** | General SaaS, E-Commerce, Consumer Apps | Blocks serious deceptive patterns (sneaky subscriptions, fake countdowns, hidden fees) without failing minor copy tweaks. |
+| **`85 – 95`** | **Strict Compliance** | Fintech, Banking, Healthcare, EU Regulated | Strict GDPR cookie equality, contrast, and cancellation clarity enforcement. |
+| **`50 – 60`** | **Lenient / Redesign** | Legacy platforms undergoing multi-phase redesigns | Catches catastrophic legal traps while legacy flows are refactored. |
 
 ---
 
 ## 🎯 What Does DarkLens Detect?
 
-DarkLens audits your live DOM across **26 deceptive design and compliance categories**:
+DarkLens audits your live rendered DOM across **26+ regulations and deceptive patterns**:
 
 - **FTC Click-to-Cancel Traps:** Roach motel cancellations, phone-only termination requirements.
 - **GDPR & ePrivacy Consent:** Pre-consent tracking, asymmetric Accept/Reject cookie banners.
 - **CCPA / CPRA:** Missing "Do Not Sell or Share My Personal Information" notices.
-- **E-Commerce Sneaking:** Pre-checked addon checkboxes, drip pricing, hidden recurring fees.
-- **Confirmshaming:** Manipulative guilt-inducing modal copy ("No thanks, I hate saving money").
-- **False Urgency & Scarcity:** Manipulative countdown timers and fabricated stock claims.
-- **WCAG 2.1 AA Accessibility:** Unlabeled inputs, broken screen reader contrast, missing labels.
+- **E-Commerce Sneaking:** Pre-checked add-on checkboxes, drip pricing, hidden recurring fees.
+- **Confirmshaming:** Guilt-inducing decline copy ("No thanks, I hate saving money").
+- **False Urgency & Scarcity:** Fake countdown timers and fabricated stock claims.
+- **WCAG 2.1 AA Accessibility:** Contrast ratios and hidden opt-out elements.
 
 ---
 
 ## 🔑 Getting Your API Key
 
-1. Create a free account at [darklens.dev](https://darklens.dev).
-2. Go to your [Dashboard Settings](https://darklens.dev/dashboard) and generate an API key.
-3. In your GitHub repository, navigate to **Settings > Secrets and variables > Actions > New repository secret**.
+1. Sign in at [darklens.dev](https://darklens.dev).
+2. Open your [Dashboard Settings](https://darklens.dev/dashboard) and generate an API key (CI/CD scans require an Agency/Enterprise plan or API Credits).
+3. In your GitHub repository, go to **Settings > Secrets and variables > Actions > New repository secret**.
 4. Name the secret `DARKLENS_API_KEY` and paste your key.
 
 ---
