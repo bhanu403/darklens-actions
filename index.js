@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 
-const ALLOWED_FAIL_ON = new Set(['score', 'critical', 'any']);
+const ALLOWED_FAIL_ON = new Set(['score', 'critical', 'any', 'none']);
 const DEFAULT_API_URL = 'https://darklens.dev/api/ci/scan';
 const PR_COMMENT_MARKER = '<!-- darklens-compliance-report -->';
 const REQUEST_TIMEOUT_MS = 65000;
@@ -78,7 +78,7 @@ function validateThreshold(rawThreshold) {
 function validateFailOn(rawFailOn) {
   const normalized = (String(rawFailOn || '').trim() || 'score').toLowerCase();
   if (!ALLOWED_FAIL_ON.has(normalized)) {
-    throw new Error(`Invalid fail-on '${normalized}'. Expected 'score', 'critical', or 'any'.`);
+    throw new Error(`Invalid fail-on '${normalized}'. Expected 'score', 'critical', 'any', or 'none'.`);
   }
   return normalized;
 }
@@ -114,7 +114,8 @@ function appendStepSummary(filePath, markdown) {
 }
 
 function buildReportMarkdown(data, targetUrl, threshold, failOn) {
-  const passed = data.pass === true;
+  const advisoryOnly = failOn === 'none';
+  const passed = advisoryOnly ? true : data.pass === true;
   const score = Number.isFinite(Number(data.score)) ? Number(data.score) : 0;
   const findings = Array.isArray(data.findings) ? data.findings : [];
   const counts = data.counts || {};
@@ -125,8 +126,12 @@ function buildReportMarkdown(data, targetUrl, threshold, failOn) {
   const medCount = Number.isFinite(Number(counts.medium)) ? Number(counts.medium) : 0;
   const lowCount = Number.isFinite(Number(counts.low)) ? Number(counts.low) : 0;
 
-  const badge = passed ? 'PASSED' : 'FAILED';
-  const statusIcon = passed ? '✅' : '❌';
+  const badge = advisoryOnly && findings.length > 0 ? 'PASSED (Advisory Only)' : (passed ? 'PASSED' : 'FAILED');
+  const statusIcon = advisoryOnly && findings.length > 0 ? '⚠️' : (passed ? '✅' : '❌');
+  const gateText = advisoryOnly
+    ? '`fail-on: none` (Advisory / non-blocking)'
+    : `Threshold \`>= ${threshold}\` (\`fail-on: ${failOn}\`)`;
+
   const lines = [
     PR_COMMENT_MARKER,
     `## ${statusIcon} DarkLens Compliance Report — **${badge}**`,
@@ -135,13 +140,15 @@ function buildReportMarkdown(data, targetUrl, threshold, failOn) {
     '| :--- | :--- |',
     `| **Target URL** | ${escapeMarkdownCell(targetUrl)} |`,
     `| **Compliance Score** | **${score} / 100** |`,
-    `| **Required Gate** | Threshold \`>= ${threshold}\` (\`fail-on: ${failOn}\`) |`,
+    `| **Policy Gate** | ${gateText} |`,
     `| **Findings** | ${findings.length} (${critCount} Critical, ${highCount} High, ${medCount} Medium, ${lowCount} Low) |`,
     '',
   ];
 
   if (data.failReason && !passed) {
-    lines.push(`> **Gate Failure:** ${escapeMarkdownCell(data.failReason)}`, '');
+    lines.push(`> **Why This Check Failed:** ${escapeMarkdownCell(data.failReason)} — Fix the violations below (or set \`fail-on: none\` / \`fail-on: critical\` for non-blocking or critical-only checks).`, '');
+  } else if (advisoryOnly && findings.length > 0) {
+    lines.push('> **Advisory Mode (`fail-on: none`):** Violations were found below, but build blocking is disabled so your PR can still merge.', '');
   }
 
   if (data.summary) {
@@ -160,31 +167,41 @@ function buildReportMarkdown(data, targetUrl, threshold, failOn) {
 
   if (findings.length > 0) {
     lines.push(
-      '### Detected Issues & Remediation',
+      '### Detected Issues (What Is Wrong & How to Fix)',
       '',
-      '| Severity | Finding | Regulation | Fair Alternative |',
+      '| Severity | What Is Wrong | Law / Rule | How to Fix |',
       '| :--- | :--- | :--- | :--- |'
     );
     for (const f of findings.slice(0, 25)) {
       const sev = escapeMarkdownCell((f.severity || 'issue').toUpperCase());
       const name = escapeMarkdownCell(f.name || 'Compliance Issue');
+      const desc = f.description ? `<br/>${escapeMarkdownCell(f.description)}` : '';
       const reg = escapeMarkdownCell(f.regulation || 'FTC / GDPR / EU DSA');
-      const fair = escapeMarkdownCell(f.fairAlternative || f.description || 'Review in dashboard');
-      lines.push(`| **${sev}** | ${name} | ${reg} | ${fair} |`);
+      const fair = escapeMarkdownCell(f.fairAlternative || 'See remediation steps below');
+      lines.push(`| **${sev}** | **${name}**${desc} | ${reg} | ${fair} |`);
     }
     if (findings.length > 25) {
       lines.push('', `*...and ${findings.length - 25} more finding(s) on your dashboard.*`);
     }
 
-    const withDetails = findings.slice(0, 10).filter((f) => (Array.isArray(f.fixSteps) && f.fixSteps.length > 0) || f.fixCodeSnippet);
+    const withDetails = findings.slice(0, 10).filter(
+      (f) => f.description || f.element || f.fairAlternative || (Array.isArray(f.fixSteps) && f.fixSteps.length > 0) || f.fixCodeSnippet
+    );
     if (withDetails.length > 0) {
-      lines.push('', '<details>', `<summary>Engineering Remediation Steps & Code Fixes (${withDetails.length})</summary>`, '');
+      lines.push('', '<details>', `<summary>Step-by-Step Solutions & Ready Code Snippets (${withDetails.length})</summary>`, '');
       withDetails.forEach((f, idx) => {
-        lines.push(`#### ${idx + 1}. ${escapeMarkdownCell(f.name || 'Issue')}`);
+        lines.push(`#### ${idx + 1}. [${escapeMarkdownCell((f.severity || 'issue').toUpperCase())}] ${escapeMarkdownCell(f.name || 'Issue')}`);
+        if (f.description) {
+          lines.push(`- **Problem:** ${escapeMarkdownCell(f.description)}`);
+        }
         if (f.element) {
-          lines.push(`- **Target:** \`${sanitizeSingleLine(f.element).replace(/`/g, "'")}\``);
+          lines.push(`- **Element Found:** \`${sanitizeSingleLine(f.element).replace(/`/g, "'")}\``);
+        }
+        if (f.fairAlternative) {
+          lines.push(`- **Solution (Fair Alternative):** ${escapeMarkdownCell(f.fairAlternative)}`);
         }
         if (Array.isArray(f.fixSteps) && f.fixSteps.length > 0) {
+          lines.push('- **Fix Steps:**');
           f.fixSteps.forEach((step) => lines.push(`  - ${sanitizeSingleLine(step)}`));
         }
         if (f.fixCodeSnippet) {
@@ -202,21 +219,38 @@ function buildReportMarkdown(data, targetUrl, threshold, failOn) {
   return lines.join('\n');
 }
 
-function emitAnnotations(passed, findings, failReason) {
+function emitAnnotationsAndConsoleReport(passed, findings, failReason) {
   if (!passed) {
     console.log(`::error::Dark pattern check failed! ${sanitizeSingleLine(failReason || 'Compliance criteria not met.')}`);
   }
   const level = passed ? 'warning' : 'error';
-  for (const f of findings) {
+  findings.forEach((f, idx) => {
     const sev = sanitizeSingleLine(f.severity || 'issue').toUpperCase();
     const name = sanitizeSingleLine(f.name || 'Unknown issue');
     const reg = sanitizeSingleLine(f.regulation || '');
+    const desc = sanitizeSingleLine(f.description || '');
+    const elem = sanitizeSingleLine(f.element || '');
     const fix = sanitizeSingleLine(f.fairAlternative || '');
-    const parts = [`[${sev}] ${name}`];
-    if (reg) parts.push(`(${reg})`);
-    if (fix) parts.push(`— Fix: ${fix}`);
-    console.log(`::${level}::${parts.join(' ')}`);
-  }
+
+    // Readable console breakdown for developers inspecting workflow logs directly
+    console.log(`\n  [${idx + 1}] [${sev}] ${name}${reg ? ` (${reg})` : ''}`);
+    if (desc) console.log(`      Problem:  ${desc}`);
+    if (elem) console.log(`      Element:  ${elem}`);
+    if (fix) console.log(`      Solution: ${fix}`);
+    if (Array.isArray(f.fixSteps) && f.fixSteps.length > 0) {
+      console.log(`      Steps:    ${f.fixSteps.map((s) => sanitizeSingleLine(s)).join(' -> ')}`);
+    }
+
+    // Keep GitHub workflow annotations within GitHub's 10-per-step display cap
+    if (idx < 10) {
+      const parts = [`[${sev}] ${name}`];
+      if (desc) parts.push(`— Problem: ${desc}`);
+      if (fix) parts.push(`| Solution: ${fix}`);
+      if (reg) parts.push(`(${reg})`);
+      console.log(`::${level}::${parts.join(' ')}`);
+    }
+  });
+  if (findings.length > 0) console.log('');
 }
 
 async function postOrUpdatePrComment({ token, markdown }) {
@@ -365,7 +399,7 @@ async function run() {
   }
 
   const findings = Array.isArray(data.findings) ? data.findings : [];
-  const passed = data.pass === true;
+  const passed = failOn === 'none' ? true : data.pass === true;
   const score = Number.isFinite(Number(data.score)) ? Math.round(Number(data.score)) : 0;
   const issuesCount = findings.length;
   const criticalCount = Number.isFinite(Number(data?.counts?.critical))
@@ -400,19 +434,21 @@ async function run() {
   }
 
   console.log('======================================');
-  console.log(`DarkLens Score: ${score} / 100 (${passed ? 'PASS' : 'FAIL'})`);
+  console.log(`DarkLens Score: ${score} / 100 (${passed ? (failOn === 'none' && issuesCount > 0 ? 'ADVISORY PASS' : 'PASS') : 'FAIL'})`);
   console.log(`Threshold:      ${threshold} (Criterion: ${failOn})`);
   console.log(`Findings:       ${issuesCount} (${criticalCount} Critical)`);
   console.log('======================================');
 
-  emitAnnotations(passed, findings, data.failReason);
+  emitAnnotationsAndConsoleReport(passed, findings, data.failReason);
 
   if (!passed) {
     process.exitCode = 1;
     return;
   }
 
-  console.log('Dark pattern check passed! Compliance gate satisfied.');
+  console.log(failOn === 'none' && issuesCount > 0
+    ? 'DarkLens advisory scan complete (non-blocking fail-on: none). See warnings & PR summary above.'
+    : 'Dark pattern check passed! Compliance gate satisfied.');
 }
 
 if (require.main === module) {

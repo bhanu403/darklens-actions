@@ -7,7 +7,8 @@
 Automate compliance and dark pattern testing in your CI/CD pipeline. Automatically audit pull requests, staging environments, and production deployments for deceptive design patterns, regulatory violations (**FTC Act Sec. 5, GDPR, CCPA/CPRA, EU DSA**), and sneaky checkout traps before shipping code to customers.
 
 - **Native Node 24 Runtime:** Zero external dependencies (`node24`), cross-platform across Ubuntu, macOS, and Windows runners.
-- **Rich GitHub Job Summary:** Automatically renders a compliance scorecard, jurisdictions at risk, fair-pattern alternatives, fix steps, and code snippets in every workflow run.
+- **Rich GitHub Job Summary:** Automatically renders a compliance scorecard showing **what failed, why it matters legally, fair-pattern alternatives, step-by-step fix instructions, and ready-to-paste code snippets**.
+- **Optional Non-Blocking Advisory Mode (`fail-on: 'none'`):** Report problems & fixes directly on PRs as non-blocking warnings (`exit 0`) so developers aren't blocked while adopting DarkLens (or set `fail-on: 'critical'` to block only severe violations).
 - **Sticky PR Comments (Optional):** Set `comment-pr: 'true'` to automatically post and update a single non-spamming compliance report on Pull Requests.
 
 ---
@@ -51,7 +52,7 @@ jobs:
 | `url` | The URL of the deployment or staging server to audit (e.g., Vercel preview URL). | **Yes** | — |
 | `api-key` | Your DarkLens API key. Get your key at [darklens.dev/dashboard](https://darklens.dev/dashboard). | **Yes** | — |
 | `threshold` | Minimum acceptable compliance score (0–100). Fails the build if score drops below threshold. | No | `70` |
-| `fail-on` | Failure criterion: `score`, `critical`, or `any`. | No | `score` |
+| `fail-on` | Failure criterion: `score`, `critical`, `any`, or `none` (`none` = warn-only advisory report without failing PRs). | No | `score` |
 | `comment-pr` | Post or update a sticky DarkLens compliance report on Pull Requests (`true`/`false`). | No | `false` |
 | `github-token` | GitHub token (`${{ secrets.GITHUB_TOKEN }}`) used when `comment-pr` is `true`. | No | `''` |
 | `api-url` | Optional DarkLens CI endpoint override. | No | `https://darklens.dev/api/ci/scan` |

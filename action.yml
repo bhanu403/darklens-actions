@@ -16,7 +16,7 @@ inputs:
     required: false
     default: '70'
   fail-on:
-    description: 'Failure criterion: score, critical, or any'
+    description: 'Failure criterion: score, critical, any, or none (warn-only advisory mode)'
     required: false
     default: 'score'
   comment-pr:
