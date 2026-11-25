@@ -13,8 +13,9 @@ function getInput(name, fallback = '') {
   const withUnderscore = upper.replace(/-/g, '_');
   const hyphenVal = process.env[`INPUT_${upper}`];
   const underVal = process.env[`INPUT_${withUnderscore}`];
-  const raw = hyphenVal !== undefined && hyphenVal !== '' ? hyphenVal : underVal;
-  return raw !== undefined && raw !== '' ? String(raw).trim() : fallback;
+  const hyphenTrimmed = hyphenVal !== undefined ? String(hyphenVal).trim() : '';
+  const underTrimmed = underVal !== undefined ? String(underVal).trim() : '';
+  return hyphenTrimmed || underTrimmed || fallback;
 }
 
 function sanitizeSingleLine(value) {
@@ -205,7 +206,8 @@ function buildReportMarkdown(data, targetUrl, threshold, failOn) {
           f.fixSteps.forEach((step) => lines.push(`  - ${sanitizeSingleLine(step)}`));
         }
         if (f.fixCodeSnippet) {
-          lines.push('', '```html', String(f.fixCodeSnippet).trim(), '```');
+          const safeSnippet = String(f.fixCodeSnippet).trim().replace(/~~~~/g, '\\~~~~');
+          lines.push('', '~~~~html', safeSnippet, '~~~~');
         }
         lines.push('');
       });
@@ -281,16 +283,19 @@ async function postOrUpdatePrComment({ token, markdown }) {
   };
 
   try {
-    const listUrl = `${apiBase}/repos/${repoFull}/issues/${prNumber}/comments?per_page=100`;
-    const listRes = await fetch(listUrl, { headers, signal: AbortSignal.timeout(15000) });
-    if (!listRes.ok) {
-      console.log(`::warning::Could not list PR comments (HTTP ${listRes.status}); skipping PR comment.`);
-      return;
+    let existing = null;
+    for (let page = 1; page <= 5; page += 1) {
+      const listUrl = `${apiBase}/repos/${repoFull}/issues/${prNumber}/comments?per_page=100&page=${page}`;
+      const listRes = await fetch(listUrl, { headers, signal: AbortSignal.timeout(15000) });
+      if (!listRes.ok) {
+        console.log(`::warning::Could not list PR comments (HTTP ${listRes.status}); skipping PR comment.`);
+        return;
+      }
+      const comments = await listRes.json();
+      if (!Array.isArray(comments) || comments.length === 0) break;
+      existing = comments.find((c) => typeof c.body === 'string' && c.body.includes(PR_COMMENT_MARKER)) || null;
+      if (existing || comments.length < 100) break;
     }
-    const comments = await listRes.json();
-    const existing = Array.isArray(comments)
-      ? comments.find((c) => typeof c.body === 'string' && c.body.includes(PR_COMMENT_MARKER))
-      : null;
 
     if (existing && existing.id) {
       const updateUrl = `${apiBase}/repos/${repoFull}/issues/comments/${existing.id}`;
